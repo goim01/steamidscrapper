@@ -33,36 +33,57 @@ def save_mod_id(workshop_id, mod_id, cursor, conn):
 def get_mod_id_from_description(description):
     """Extract Mod ID from a mod's description using regex."""
     if not description:
+        print("Debug: Description is empty or None")
         return None
-    # Common patterns for Mod ID in descriptions
+    # Expanded patterns for Mod ID in descriptions
     patterns = [
-        r'Mod ID:\s*([^\s;]+)',
-        r'Mods:\s*([^\s;]+)',
-        r'ModID:\s*([^\s;]+)',
-        r'mod_id:\s*([^\s;]+)'
+        r'Mod ID:\s*([^\s;,\n]+)',           # Mod ID: AdvancedVolumeEnabler
+        r'Mods:\s*([^\s;,\n]+)',             # Mods: AdvancedVolumeEnabler
+        r'ModID:\s*([^\s;,\n]+)',            # ModID: AdvancedVolumeEnabler
+        r'mod_id:\s*([^\s;,\n]+)',           # mod_id: AdvancedVolumeEnabler
+        r'Mod:\s*([^\s;,\n]+)',              # Mod: AdvancedVolumeEnabler
+        r'ModID\s*=\s*([^\s;,\n]+)',         # ModID=AdvancedVolumeEnabler
+        r'Mod ID\s*=\s*([^\s;,\n]+)',        # Mod ID=AdvancedVolumeEnabler
+        r'\[b\]Mod ID:\s*([^\s;,\]\n]+)',    # [b]Mod ID: AdvancedVolumeEnabler[/b]
+        r'Mod\s*ID\s*[^a-zA-Z0-9]*\s*([^\s;,\n]+)'  # Flexible: Mod   ID  =  AdvancedVolumeEnabler
     ]
     for pattern in patterns:
         match = re.search(pattern, description, re.IGNORECASE)
         if match:
             return match.group(1).strip()
+    # Debug: Print description for failed extractions
+    print(f"Debug: No Mod ID found in description:\n{description[:500]}...")  # Truncate for readability
     return None
 
 def get_mod_ids(workshop_ids, api_key):
     """Fetch Mod IDs for a list of Workshop IDs using Steam Web API, with caching."""
+    # Validate Workshop IDs
+    valid_workshop_ids = []
+    for wid in workshop_ids:
+        if wid.strip().isdigit():
+            valid_workshop_ids.append(wid.strip())
+        else:
+            print(f"Error: Invalid Workshop ID '{wid}' (must be numeric)")
+    if not valid_workshop_ids:
+        print("Error: No valid Workshop IDs provided")
+        return ""
+
     # Initialize database
     conn, cursor = init_database()
     
     # Check for cached Mod IDs
-    cached_mod_ids = get_cached_mod_ids(workshop_ids, cursor)
+    cached_mod_ids = get_cached_mod_ids(valid_workshop_ids, cursor)
     mod_ids = []
-    uncached_workshop_ids = [wid for wid in workshop_ids if wid not in cached_mod_ids]
+    uncached_workshop_ids = []
     
-    # Process cached results first
-    for wid in workshop_ids:
-        if wid in cached_mod_ids:
+    # Separate cached and uncached IDs, force re-fetch for Unknown_<WorkshopID>
+    for wid in valid_workshop_ids:
+        if wid in cached_mod_ids and not cached_mod_ids[wid].startswith("Unknown_"):
             mod_id = cached_mod_ids[wid]
             print(f"Workshop ID: {wid} -> Mod ID: {mod_id} (from cache)")
             mod_ids.append(mod_id)
+        else:
+            uncached_workshop_ids.append(wid)
     
     if not uncached_workshop_ids:
         conn.close()
@@ -85,7 +106,7 @@ def get_mod_ids(workshop_ids, api_key):
             result = response.json()
             
             if "response" not in result or "publishedfiledetails" not in result["response"]:
-                print(f"Error: Invalid response for batch {batch}")
+                print(f"Error: Invalid API response for batch {batch}")
                 for wid in batch:
                     mod_ids.append(f"Unknown_{wid}")
                     save_mod_id(wid, f"Unknown_{wid}", cursor, conn)
@@ -105,7 +126,6 @@ def get_mod_ids(workshop_ids, api_key):
                     mod_ids.append(mod_id)
                     save_mod_id(workshop_id, mod_id, cursor, conn)
                 else:
-                    print(f"Workshop ID: {workshop_id} -> Mod ID: Unknown_{workshop_id}")
                     mod_ids.append(f"Unknown_{workshop_id}")
                     save_mod_id(workshop_id, f"Unknown_{workshop_id}", cursor, conn)
         except requests.RequestException as e:
